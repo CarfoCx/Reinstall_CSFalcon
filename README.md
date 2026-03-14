@@ -90,11 +90,13 @@ Set `$Hostname` to match your CrowdStrike tenant's cloud region:
 
 ---
 
-## Usage
+## Deployment Methods
 
-### Step 5: Run the Script
+After completing the setup steps above, choose the deployment method that fits your environment. All methods require the configured script and `WindowsSensor.exe` to be accessible on each target endpoint.
 
-#### Option A: Running via RTR (Real-Time Response)
+### Option A: CrowdStrike RTR (Real-Time Response)
+
+Best for targeting specific hosts directly from the Falcon console.
 
 1. Stage `WindowsSensor.exe` on the target host (e.g., use RTR `put` to drop it to `C:\Temp\`)
 2. Run the script through an RTR session:
@@ -103,13 +105,98 @@ Set `$Hostname` to match your CrowdStrike tenant's cloud region:
 runscript -CloudFile="uninstall_crowdstrike_force" -Timeout=120
 ```
 
-#### Option B: Running Locally
+### Option B: PDQ Deploy
+
+Best for deploying across many endpoints from a centralized console.
+
+1. Copy `uninstall_crowdstrike_force.ps1` and `WindowsSensor.exe` to a network share accessible by target machines (e.g., `\\fileserver\deploy\crowdstrike\`)
+2. In **PDQ Deploy**, create a new package:
+   - **Step 1 — Copy file**: Add a *File Copy* step to copy `WindowsSensor.exe` from the network share to `C:\Temp\` on the target
+   - **Step 2 — Run script**: Add a *PowerShell* step and paste the full contents of `uninstall_crowdstrike_force.ps1`, or point it to the script on the network share
+3. Set the package to run as **Local System** (Deploy > Options > ensure "Run As" is set to *Deploy User* or *Local System* with admin rights)
+4. Create a schedule or target specific machines/collections in **PDQ Inventory** and deploy
+
+> **Tip:** Use PDQ Inventory to build a dynamic collection of machines where the Falcon sensor service is stopped or missing, then target that collection with the deploy package.
+
+### Option C: Group Policy (GPO)
+
+Best for domain-joined environments where you want policy-driven deployment.
+
+1. Place `uninstall_crowdstrike_force.ps1` and `WindowsSensor.exe` on a network share accessible by all target machines (e.g., `\\domain.local\SYSVOL\domain.local\scripts\crowdstrike\` or a dedicated share)
+2. Update `$InstallerPath` in the script to point to the network share path, or add a file copy command at the beginning of the script
+3. Open **Group Policy Management Console** (`gpmc.msc`)
+4. Create a new GPO or edit an existing one, then link it to the OU containing the target machines
+5. Navigate to **Computer Configuration > Policies > Windows Settings > Scripts (Startup/Shutdown)**
+6. Click **Startup**, go to the **PowerShell Scripts** tab
+7. Click **Add**, browse to the script on the network share, and add it
+8. Ensure the GPO execution policy allows scripts:
+   - Go to **Computer Configuration > Policies > Administrative Templates > Windows Components > Windows PowerShell**
+   - Set **Turn on Script Execution** to **Enabled** and select **Allow all scripts**
+9. Run `gpupdate /force` on target machines or wait for the next Group Policy refresh cycle
+
+> **Note:** Startup scripts run as SYSTEM, which satisfies the admin privilege requirement. The machine must be able to reach both the network share and the CrowdStrike API at boot time.
+
+### Option D: WinRM (PowerShell Remoting)
+
+Best for ad-hoc deployment to a list of machines from an admin workstation.
+
+**Single machine:**
+
+```powershell
+Invoke-Command -ComputerName "TARGET-PC" -FilePath "\\fileserver\deploy\crowdstrike\uninstall_crowdstrike_force.ps1"
+```
+
+**Multiple machines from a list:**
+
+```powershell
+$computers = Get-Content "C:\admin\target_machines.txt"
+Invoke-Command -ComputerName $computers -FilePath "\\fileserver\deploy\crowdstrike\uninstall_crowdstrike_force.ps1" -ThrottleLimit 10
+```
+
+**Multiple machines from Active Directory:**
+
+```powershell
+$computers = (Get-ADComputer -Filter {OperatingSystem -like "*Windows*"} -SearchBase "OU=Workstations,DC=domain,DC=local").Name
+Invoke-Command -ComputerName $computers -FilePath "\\fileserver\deploy\crowdstrike\uninstall_crowdstrike_force.ps1" -ThrottleLimit 10
+```
+
+**Prerequisites for WinRM:**
+- WinRM must be enabled on target machines (`winrm quickconfig` or enable via GPO)
+- The admin account running the command must have local admin rights on the targets
+- `WindowsSensor.exe` must already be staged at the path specified in `$InstallerPath` on each target, or accessible via a UNC path
+- Ensure firewall rules allow WinRM (TCP 5985/5986)
+
+> **Tip:** To stage the installer on all targets before running the script:
+> ```powershell
+> $computers = Get-Content "C:\admin\target_machines.txt"
+> foreach ($pc in $computers) {
+>     Copy-Item "\\fileserver\deploy\crowdstrike\WindowsSensor.exe" -Destination "\\$pc\C$\Temp\" -Force
+> }
+> ```
+
+### Option E: SCCM / Microsoft Endpoint Configuration Manager (MECM)
+
+Best for enterprise environments already using SCCM/MECM for software deployment.
+
+1. Create a new **Package** in the SCCM console (Software Library > Packages)
+2. Set the source folder to a network share containing both `uninstall_crowdstrike_force.ps1` and `WindowsSensor.exe`
+3. Create a **Program** under the package:
+   - **Command line:** `powershell.exe -ExecutionPolicy Bypass -File uninstall_crowdstrike_force.ps1`
+   - **Run:** Hidden
+   - **Run mode:** Run with administrative rights
+4. Distribute the package to your distribution points
+5. Deploy the package to a device collection containing the target machines
+   - Set the deployment purpose to **Required** for automatic execution
+
+### Option F: Running Locally
+
+For individual machines where remote deployment is not needed:
 
 ```powershell
 .\uninstall_crowdstrike_force.ps1
 ```
 
-> **Note:** The script must be run with administrative privileges. The endpoint will briefly lose sensor coverage during the reinstall window.
+> **Note:** Must be run from an elevated (Administrator) PowerShell prompt. The endpoint will briefly lose sensor coverage during the reinstall window.
 
 ---
 
