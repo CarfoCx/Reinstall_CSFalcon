@@ -1,3 +1,5 @@
+*If this helped, consider donating $1+ to me at https://ko-fi.com/carfo*
+
 # Reinstall CrowdStrike Falcon Sensor
 
 A PowerShell script that automates the uninstall and reinstall of the CrowdStrike Falcon sensor on Windows endpoints via Real-Time Response (RTR). This is useful when a Falcon agent has fallen off, become unresponsive, or needs a clean reinstall without manual intervention.
